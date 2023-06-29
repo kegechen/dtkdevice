@@ -67,7 +67,7 @@ struct cpuInfoLst {
 };
 
 struct cpuBaseInfo{
-    int       physicalCount{0};
+    int       physicalId{0};
     QString   vendor  {""};
     QString   model  {""};
     int   coreCount  {0};
@@ -86,10 +86,10 @@ public:
         , m_hwNode("computer", hw::sys_tem)
     {
 
-        m_listDeviceInfos.clear();
+//        m_listDeviceInfos.clear();
         m_cpuBaseInfos.clear();
         scan_system(m_hwNode);
-        addDeviceInfo(m_hwNode, m_listDeviceInfos);
+//        addDeviceInfo(m_hwNode, m_listDeviceInfos);
         addDeviceInfo(m_infos,m_cpuBaseInfos);
     }
 
@@ -104,7 +104,7 @@ private:
     hwNode            m_hwNode ;
     QList<cpuInfoLst> m_infos;
     QList <cpuBaseInfo> m_cpuBaseInfos;
-    QList< DlsDevice::DDeviceInfo > m_listDeviceInfos;
+//    QList< DlsDevice::DDeviceInfo > m_listDeviceInfos;
 };
 
 void DCpuDevicePrivate::addDeviceInfo(hwNode &node, QList< DlsDevice::DDeviceInfo> &infoLst)
@@ -129,194 +129,212 @@ void DCpuDevicePrivate::addDeviceInfo(hwNode &node, QList< DlsDevice::DDeviceInf
     }
 }
 
-void DCpuDevicePrivate::addDeviceInfo(QList<cpuInfoLst> &infoLst, QList<cpuBaseInfo> &baseInfoLst)
+static int readCpuInfo(QMap<QString, QMap<QString, QString>> &cpuInfos)
 {
     QFile file(PROC_CPU_INFO_PATH);
-    QString vendor = "";
-    QString Product = "";
-    int prePhysicalID = -1;
+    if (!file.exists()) {
+        qWarning() << PROC_CPU_INFO_PATH << "not exist.";
+        return -1;
+    }
 
-    if (file.exists() && file.open(QFile::ReadOnly)) {
-        // 计算总的Cpu占用率，只需要读取第一行数据
-        QString cpuinfo = file.readLine();
-        file.close();
+    if (!file.open(QFile::ReadOnly)) {
+        qWarning() << PROC_CPU_INFO_PATH << "open failed." << file.errorString();
+        return -1;
+    }
 
-        QStringList processors = cpuinfo.split("\n\n", D_SPLIT_BEHAVIOR);
-        for (int i = 0; i < processors.count(); ++i) {
-            struct cpuInfoLst info;
-            QStringList list = processors[i].split("\n", D_SPLIT_BEHAVIOR);
-            for (QString text : list) {
-                if (text.startsWith("processor")) {
-                    info.processorID = (text.split(":").value(1).toInt());
-                } else if (text.startsWith("vendor_id")) {
-                    if (vendor.isEmpty())
-                        vendor = (text.split(":").value(1));
-                } else if (text.startsWith("model name")) {
-                    if (Product.isEmpty())
-                        Product = (text.split(":").value(1));
-                } else if (text.startsWith("core id")) {
-                    info.coreID = (text.split(":").value(1).toInt());
-                } else if (text.startsWith("physical id")) {
-                    info.physicalID = (text.split(":").value(1).toInt());
-                } else if (text.startsWith("cache size")) {
-                    info.cache_All = (text.split(":").value(1));
-                } else if (text.startsWith("flags")) {
-                    info.flags = (text.split(":").value(1));
-                } else if (text.startsWith("stepping")) {
-                    info.stepping = (text.split(":").value(1));
-                } else if (text.startsWith("cpu family")) {
-                    info.family = (text.split(":").value(1));
-                } else if (text.startsWith("bogomips")) {
-                    info.bogoMIPS = (text.split(":").value(1));
-                } else if (text.startsWith("cpu MHz")) {
-                    info.currentFreq = (text.split(":").value(1));
-                } else if (text.startsWith("stepping")) {
-                    info.stepping = (text.split(":").value(1));
-                } else if (text.startsWith("stepping")) {
-                    info.stepping = (text.split(":").value(1));
-                }
+    QString datas = file.readAll();
+    file.close();
 
-                QFile freqmaxfile(QString(PATH_TPL_CPU_FREQ_MAX).arg(info.processorID));
-                if (freqmaxfile.exists() && freqmaxfile.open(QFile::ReadOnly)) {
-                    // 计算总的Cpu占用率，只需要读取第一行数据
-                    QString freqmaxinfo = freqmaxfile.readLine();
-                    freqmaxfile.close();
-                    int freqmax = freqmaxinfo.toInt() / 1000;
-                    freqmaxinfo = QString::number(freqmax) + "Mhz";
-                    info.maxFreq = freqmaxinfo;
-                }
-
-                QFile freqminfile(QString(PATH_TPL_CPU_FREQ_MIN).arg(info.processorID));
-                if (freqminfile.exists() && freqminfile.open(QFile::ReadOnly)) {
-                    // 计算总的Cpu占用率，只需要读取第一行数据
-                    QString freqmininfo = freqminfile.readLine();
-                    freqminfile.close();
-                    int freqmin = freqmininfo.toInt() / 1000;
-                    freqmininfo = QString::number(freqmin) + "Mhz";
-                    info.minFreq = freqmininfo;
-                }
-                if (prePhysicalID != info.physicalID) {
-                    prePhysicalID = info.physicalID;
-                    struct cpuBaseInfo baseInfo;
-                    baseInfo.vendor = vendor;
-                    baseInfo.model = Product;
-                    baseInfo.physicalCount = prePhysicalID;
-
-                    QString buffer{};
-                    struct utsname os
-                    {};
-                    auto rc = uname(&os);
-                    if (!rc) {
-                        buffer = os.machine;
-                        baseInfo.architecture = buffer;
-                    }
-
-                    QDir dir("/proc");
-                    QFileInfoList infoList = dir.entryInfoList();
-                    int threads = 0;
-                    for (QFileInfo info : infoList) {
-                        if (info.isDir() && info.fileName().toInt() > 0) {
-                            QDir taskDir("/proc/" + info.fileName() + "/task");
-                            threads += taskDir.entryInfoList().count();
-                        }
-                    }
-                    baseInfo.threadCount = threads;
-
-                    // Linux下获取cpu温度 cat /sys/class/hwmon/hwmon1/temp1_input
-                    // https://www.kernel.org/doc/Documentation/hwmon/sysfs-interface
-                    // cat /sys/class/hwmon/hwmon1/temp1_label      Package id 0
-
-                    QFile tempfile(PATH_CPU_TEMP_INPUT);
-                    int temperature = 0;
-                    if (tempfile.exists() && tempfile.open(QFile::ReadOnly)) {
-                        QString tempinfo = tempfile.readLine();
-                        tempfile.close();
-                        temperature = tempinfo.toInt() / 1000;
-                        tempinfo = QString::number(temperature) + "°C";
-                        baseInfo.temperature = tempinfo;
-                    }
-
-                    QFile file(PROC_CPU_STAT_PATH);
-                    if (file.exists() && file.open(QFile::ReadOnly)) {
-                        // 计算总的Cpu占用率，只需要读取第一行数据
-                        QByteArray lineData = file.readLine();
-                        file.close();
-                        // 样例数据 ： cpu  7048360 4246 3733400 801045435 846386 0 929664 0 0 0
-                        //         |user|nice|sys|idle|iowait|hardqirq|softirq|steal|guest|guest_nice|
-                        // 分割行数据
-
-                        QStringList cpuStatus = QString(lineData).split(" ", D_SPLIT_BEHAVIOR);
-
-                        // CPU状态应包含10个数据片段，有效数据 1-10，位置0不使用
-                        if (cpuStatus.size() >= 11) {
-                            // 构建数据map，便于后期数据计算方式需求变更s
-
-                            baseInfo.stat.user = cpuStatus.at(1).toULongLong();
-                            baseInfo.stat.nice = cpuStatus.at(2).toULongLong();
-                            baseInfo.stat.sys = cpuStatus.at(3).toULongLong();
-                            baseInfo.stat.idle = cpuStatus.at(4).toULongLong();
-                            baseInfo.stat.iowait = cpuStatus.at(5).toULongLong();
-                            baseInfo.stat.hardirq = cpuStatus.at(6).toULongLong();
-                            baseInfo.stat.softirq = cpuStatus.at(7).toULongLong();
-                            baseInfo.stat.steal = cpuStatus.at(8).toULongLong();
-                            baseInfo.stat.guest = cpuStatus.at(9).toULongLong();
-                            baseInfo.stat.guestNice = cpuStatus.at(10).toULongLong();
-
-                            quint64 curTotalCpu = 0;
-                            for (int i = 1; i <= 10; i++) {
-                                curTotalCpu = curTotalCpu + cpuStatus.at(i).toULongLong();
-                            }
-                            baseInfo.usage.total = curTotalCpu;
-                            baseInfo.usage.idle = baseInfo.stat.idle + baseInfo.stat.iowait;
-                        }
-                    }
-
-                    baseInfoLst.append(baseInfo);
-                }
+    int physicalId = 0;
+    QStringList processors = datas.split("\n\n", D_SPLIT_BEHAVIOR);
+    for (int i = 0; i < processors.count(); ++i) {
+        QStringList lines = processors[i].split("\n", D_SPLIT_BEHAVIOR);
+        QMap<QString, QString> procInfo;
+        for (const QString &line : lines) {
+            const QStringList &kv = line.split(':', D_SPLIT_BEHAVIOR);
+            procInfo.insert(kv.value(0).trimmed(), kv.value(1).trimmed());
+            if (kv.value(0).compare("physical id") && kv.value(1).toInt() != physicalId) {
+                physicalId = kv.value(1).toInt();
             }
+        }
 
-            infoLst.append(info);
+        if (!procInfo.value("processor").isEmpty())
+            cpuInfos.insert(procInfo.value("processor"), procInfo);
+    }
+
+    return physicalId + 1;
+}
+
+static void readCpuStat(QVector<QPair<DCpuDevice::DCpuStat, DCpuDevice::DCpuUsage>> &cpuinfo)
+{
+    QFile file(PROC_CPU_STAT_PATH);
+    if (!file.exists()) {
+        qWarning() << PROC_CPU_STAT_PATH << "not exist.";
+        return;
+    }
+
+    if (!file.open(QFile::ReadOnly)) {
+        qWarning() << PROC_CPU_STAT_PATH << "open failed." << file.errorString();
+        return;
+    }
+
+    QRegularExpression reg = QRegularExpression("cpu\\d*");
+    do {
+         QString line = file.readLine();
+
+         //  cpu    7048360   4246    3733400     801045435      846386      0       929664      0       0        0
+         //       |  user  |  nice  |   sys    |    idle     |  iowait  | hardqirq | softirq | steal | guest | guest_nice |
+         QStringList cpuStatus = line.split(" ", D_SPLIT_BEHAVIOR);
+         if (cpuStatus.size() < 11) {
+             qWarning() << PROC_CPU_STAT_PATH << "parse failed";
+             break;
+         }
+         if (!reg.match(cpuStatus.at(0)).hasMatch()) {
+             break;
+         }
+
+         DCpuDevice::DCpuStat stat;
+         quint64 *stats[] = {
+             &stat.user,
+             &stat.nice,
+             &stat.sys,
+             &stat.idle,
+             &stat.iowait,
+             &stat.hardirq,
+             &stat.softirq,
+             &stat.steal,
+             &stat.guest,
+             &stat.guestNice
+         };
+         DCpuDevice::DCpuUsage usage;
+
+         int idx = 1;
+         for (quint64 *st : stats) {
+             *st = cpuStatus.at(idx++).toULongLong();
+             usage.total += *st;
+         }
+         usage.idle = stat.idle + stat.iowait;
+
+         cpuinfo.push_back({stat, usage});
+    } while (!file.atEnd());
+}
+
+static void readCpuFreq(int processorID, QString *maxFreq = nullptr, QString *minFreq = nullptr)
+{
+    auto read_freq = [](const QString &filename){
+        QString freqInfo;
+        QFile freqfile(filename);
+        if (freqfile.exists() && freqfile.open(QFile::ReadOnly)) {
+             freqInfo = freqfile.readLine();
+            int fre = freqInfo.toInt() / 1000;
+            freqInfo = QString::number(fre) + "Mhz";
+        }
+        return freqInfo;
+    };
+
+    if (maxFreq)
+        *maxFreq = read_freq(QString(PATH_TPL_CPU_FREQ_MAX).arg(processorID));
+
+    if (minFreq)
+        *minFreq = read_freq(QString(PATH_TPL_CPU_FREQ_MIN).arg(processorID));
+}
+
+static int threadCounts()
+{
+    QDir dir("/proc");
+    QFileInfoList infoList = dir.entryInfoList();
+    int threads = 0;
+    for (QFileInfo info : infoList) {
+        if (info.isDir() && info.fileName().toInt() > 0) {
+            QDir taskDir("/proc/" + info.fileName() + "/task");
+            threads += taskDir.entryInfoList().count();
         }
     }
 
-    for (uint nn = 0; nn < infoLst.count(); nn++) {
-        QFile file(PROC_CPU_STAT_PATH);
-        if (file.exists() && file.open(QFile::ReadOnly)) {
-            // 计算总的Cpu占用率，只需要读取第一行数据
-            QString lines = file.readLine();
-            file.close();
+    return threads;
+}
 
-            QStringList lineData = lines.split("\n", D_SPLIT_BEHAVIOR);
-            for (int i = 0; i < lineData.count(); ++i) {
-                // 样例数据 ： cpu  7048360 4246 3733400 801045435 846386 0 929664 0 0 0
-                //         |user|nice|sys|idle|iowait|hardqirq|softirq|steal|guest|guest_nice|
-                // 分割行数据
-                QStringList cpuStatus = lineData[i].split(" ", D_SPLIT_BEHAVIOR);
+static inline QString cpuArch()
+{
+    QString arch;
+    struct utsname os {};
+    auto rc = uname(&os);
+    if (!rc) {
+        arch = os.machine;
+    }
 
-                // CPU状态应包含10个数据片段，有效数据 1-10，位置0不使用
+    return arch;
+}
 
-                QRegularExpression reg = QRegularExpression("cpu[0-9]{1,2}");
-                if ((cpuStatus.size() >= 11) && reg.match(cpuStatus.at(0)).hasMatch()) {
-                    infoLst[nn].stat.user = cpuStatus.at(1).toULongLong();
-                    infoLst[nn].stat.nice = cpuStatus.at(2).toULongLong();
-                    infoLst[nn].stat.sys = cpuStatus.at(3).toULongLong();
-                    infoLst[nn].stat.idle = cpuStatus.at(4).toULongLong();
-                    infoLst[nn].stat.iowait = cpuStatus.at(5).toULongLong();
-                    infoLst[nn].stat.hardirq = cpuStatus.at(6).toULongLong();
-                    infoLst[nn].stat.softirq = cpuStatus.at(7).toULongLong();
-                    infoLst[nn].stat.steal = cpuStatus.at(8).toULongLong();
-                    infoLst[nn].stat.guest = cpuStatus.at(9).toULongLong();
-                    infoLst[nn].stat.guestNice = cpuStatus.at(10).toULongLong();
+static QString cpuTemperature()
+{
+    // Linux下获取cpu温度 cat /sys/class/hwmon/hwmon1/temp1_input
+    // https://www.kernel.org/doc/Documentation/hwmon/sysfs-interface
+    // cat /sys/class/hwmon/hwmon1/temp1_label      Package id 0
 
-                    quint64 curTotalCpu = 0;
-                    for (int i = 1; i <= 10; i++) {
-                        curTotalCpu = curTotalCpu + cpuStatus.at(i).toULongLong();
-                    }
-                    infoLst[nn].usage.total = curTotalCpu;
-                    infoLst[nn].usage.idle = infoLst[nn].stat.idle + infoLst[nn].stat.iowait;
-                }
-            }
+    QString temperature;
+    QFile tempfile(PATH_CPU_TEMP_INPUT);
+
+    if (tempfile.exists() && tempfile.open(QFile::ReadOnly)) {
+        QString tempinfo = tempfile.readLine();
+        tempfile.close();
+        temperature = QString("%1").arg(tempinfo.toInt() / 1000).append("°C");
+    }
+
+    return temperature;
+}
+
+void DCpuDevicePrivate::addDeviceInfo(QList<cpuInfoLst> &infoLst, QList<cpuBaseInfo> &baseInfoLst)
+{
+    QFile file(PROC_CPU_INFO_PATH);
+
+    QVector<QPair<DCpuDevice::DCpuStat, DCpuDevice::DCpuUsage>> cpuStatsAndUsage;
+
+    readCpuStat(cpuStatsAndUsage);
+
+    QMap<QString, QMap<QString, QString>> cpuInfos;
+    readCpuInfo(cpuInfos);
+
+    int prePhysicalID = -1;
+    for (auto cpuInfo : cpuInfos) {
+        struct cpuInfoLst info;
+        info.processorID = cpuInfo.value("processor").toInt();
+        info.physicalID = cpuInfo.value("physical id").toInt();
+        info.coreID = cpuInfo.value("core id").toInt();
+        info.cache_All = cpuInfo.value("cache size");
+        info.flags = cpuInfo.value("flags");
+        info.stepping = cpuInfo.value("stepping");
+        info.family = cpuInfo.value("cpu family");
+        info.bogoMIPS = cpuInfo.value("bogomips");
+
+        info.currentFreq = cpuInfo.value("cpu MHz");
+        readCpuFreq(info.processorID, &info.maxFreq, &info.minFreq);
+        if (cpuStatsAndUsage.size() > info.processorID + 1) {
+            // 多个 cpu 时
+            info.stat = cpuStatsAndUsage.value(info.processorID + 1).first;
+            info.usage = cpuStatsAndUsage.value(info.processorID + 1).second;
         }
+
+        if (prePhysicalID != info.physicalID) {
+            prePhysicalID = info.physicalID;
+            struct cpuBaseInfo baseInfo;
+            baseInfo.vendor = cpuInfo.value("vendor_id");
+            baseInfo.model = cpuInfo.value("model name");
+            baseInfo.coreCount = cpuInfo.value("cpu cores").toInt();
+            baseInfo.physicalId = info.physicalID;
+
+            Q_UNUSED(threadCounts());
+            baseInfo.threadCount = int(cpuInfos.count()); // threadCounts(); ??
+            baseInfo.architecture = cpuArch();
+            baseInfo.temperature = cpuTemperature();
+            if (cpuStatsAndUsage.size() > 0) {
+                // 多个 cpu 时
+                baseInfo.stat = cpuStatsAndUsage.value(0).first;
+                baseInfo.usage = cpuStatsAndUsage.value(0).second;
+            }
+            baseInfoLst.append(baseInfo);
+        }
+        infoLst.append(info);
     }
 }
 
@@ -333,7 +351,7 @@ DCpuDevice::~DCpuDevice()
 int DCpuDevice::physicalCount()
 {
     Q_D(DCpuDevice);
-    return  d->m_cpuBaseInfos.count();
+    return int(d->m_cpuBaseInfos.count());
 }
 
 int DCpuDevice::coreCount(int physicalID)
